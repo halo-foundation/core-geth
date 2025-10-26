@@ -28,6 +28,7 @@ temp-fund-keys/
 blockscout-logs/
 verifier-cache/
 docs1/
+data/
 
 # Blockscout secrets
 .blockscout-secret
