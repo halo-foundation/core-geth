@@ -62,14 +62,13 @@ type Config struct {
 
 // DefaultConfig contains default settings for miner.
 var DefaultConfig = Config{
-	GasCeil:  30000000,
+	GasCeil:  vars.HaloGenesisGasLimit, // 150M for Halo network
 	GasPrice: big.NewInt(vars.GWei),
 
-	// The default recommit time is chosen as two seconds since
-	// consensus-layer usually will wait a half slot of time(6s)
-	// for payload generation. It should be enough for Geth to
-	// run 3 rounds.
-	Recommit:          2 * time.Second,
+	// Halo optimized: 900ms recommit for faster block filling
+	// Allows miner to include more transactions per block
+	// while maintaining 1-second block time target
+	Recommit:          900 * time.Millisecond,
 	NewPayloadTimeout: 2 * time.Second,
 }
 

@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:14
+    restart: always
+    container_name: halo-blockscout-db
+    environment:
+      POSTGRES_PASSWORD: 'halochain'
+      POSTGRES_USER: 'blockscout'
+      POSTGRES_DB: 'blockscout'
+    volumes:
+      - blockscout-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blockscout"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    restart: always
+    container_name: halo-blockscout-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  blockscout:
+    image: blockscout/blockscout:latest
+    restart: always
+    container_name: halo-blockscout
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_URL: 'postgresql://blockscout:halochain@db:5432/blockscout'
+
+      # Redis
+      REDIS_URL: 'redis://redis:6379'
+
+      # Network
+      NETWORK: 'Halo Chain'
+      SUBNETWORK: 'Mainnet'
+      CHAIN_ID: '12000'
+
+      # RPC endpoints - Change this to your node's IP/hostname
+      ETHEREUM_JSONRPC_VARIANT: 'geth'
+      ETHEREUM_JSONRPC_HTTP_URL: 'http://host.docker.internal:8545'
+      ETHEREUM_JSONRPC_WS_URL: 'ws://host.docker.internal:8546'
+      ETHEREUM_JSONRPC_TRACE_URL: 'http://host.docker.internal:8545'
+
+      # Indexer settings
+      INDEXER_DISABLE_PENDING_TRANSACTIONS_FETCHER: 'false'
+      INDEXER_DISABLE_INTERNAL_TRANSACTIONS_FETCHER: 'false'
+
+      # Block time
+      BLOCK_TIME: '1'
+
+      # Features
+      ENABLE_TXS_STATS: 'true'
+      SHOW_PRICE_CHART: 'false'
+      SHOW_TXS_CHART: 'true'
+      DISPLAY_TOKEN_ICONS: 'true'
+
+      # Coin settings
+      COIN: 'HALO'
+      COIN_NAME: 'Halo'
+
+      # UI Settings
+      LOGO: '/images/blockscout_logo.svg'
+      LOGO_FOOTER: '/images/blockscout_logo.svg'
+
+      # Secret key base (generate a new one with: openssl rand -base64 64)
+      SECRET_KEY_BASE: 'CHANGEME_GENERATE_WITH_OPENSSL_RAND_BASE64_64'
+
+      # API rate limit
+      API_RATE_LIMIT_DISABLED: 'false'
+      API_RATE_LIMIT: '50'
+      API_RATE_LIMIT_TIME_INTERVAL: '1s'
+
+      # Additional settings
+      HEART_BEAT_TIMEOUT: '30'
+      HEART_COMMAND: 'systemctl restart explorer'
+
+      # EIP-1559
+      EIP_1559_ENABLED: 'true'
+
+      # Ecto settings
+      ECTO_USE_SSL: 'false'
+
+      # Port
+      PORT: '4000'
+
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./blockscout-logs:/app/logs
+
+  smart-contract-verifier:
+    image: ghcr.io/blockscout/smart-contract-verifier:latest
+    restart: always
+    container_name: halo-smart-contract-verifier
+    environment:
+      SMART_CONTRACT_VERIFIER__PORT: '8050'
+      SMART_CONTRACT_VERIFIER__SOLIDITY__ENABLED: 'true'
+      SMART_CONTRACT_VERIFIER__SOLIDITY__COMPILERS_DIR: '/tmp/solidity-compilers'
+      SMART_CONTRACT_VERIFIER__SOLIDITY__REFRESH_VERSIONS_SCHEDULE: '0 0 * * * * *'
+      SMART_CONTRACT_VERIFIER__VYPER__ENABLED: 'true'
+      SMART_CONTRACT_VERIFIER__VYPER__COMPILERS_DIR: '/tmp/vyper-compilers'
+      SMART_CONTRACT_VERIFIER__VYPER__REFRESH_VERSIONS_SCHEDULE: '0 0 * * * * *'
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./verifier-cache:/tmp
+
+volumes:
+  blockscout-db-data:
+    driver: local

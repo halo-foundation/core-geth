@@ -35,6 +35,11 @@ var (
 // The total reward consists of the static block reward and rewards for
 // included uncles. The coinbase of each uncle block is also calculated.
 func GetRewards(config ctypes.ChainConfigurator, header *types.Header, uncles []*types.Header) (*uint256.Int, []*uint256.Int) {
+	// Check if this is Halo chain (ChainID 12000)
+	if config.GetChainID() != nil && config.GetChainID().Uint64() == 12000 {
+		return haloBlockReward(header, uncles)
+	}
+
 	if config.IsEnabled(config.GetEthashECIP1017Transition, header.Number) {
 		return ecip1017BlockReward(config, header, uncles)
 	}

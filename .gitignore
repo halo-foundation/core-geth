@@ -13,7 +13,25 @@
 .ethtest
 */**/*tx_database*
 */**/*dapps*
-build/_vendor/pkg
+build/_vendor/
+node_modules/*
+*/**/node_modules
+npm-debug.log
+yarn-error.log
+lerna-debug.log# Halo Chain directories
+halo-test/
+halo-gui/
+contracts/
+.claude/
+build/
+temp-fund-keys/
+blockscout-logs/
+verifier-cache/
+docs1/
+
+# Blockscout secrets
+.blockscout-secret
+
 
 #*
 .#*

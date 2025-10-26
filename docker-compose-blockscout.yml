@@ -1,0 +1,281 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:14
+    restart: always
+    container_name: halo-blockscout-db
+    command: postgres -c max_connections=200 -c shared_buffers=256MB
+    environment:
+      POSTGRES_PASSWORD: 'halochain'
+      POSTGRES_USER: 'blockscout'
+      POSTGRES_DB: 'blockscout'
+    volumes:
+      - blockscout-db-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blockscout"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    restart: always
+    container_name: halo-blockscout-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Health check service for Geth - does NOT start Geth, only checks if it's running
+  geth-checker:
+    image: curlimages/curl:latest
+    container_name: halo-geth-checker
+    command: >
+      sh -c "
+      echo '=== Checking if Geth is available at 172.17.0.1:8545 ===';
+      attempt=0;
+      max_attempts=30;
+      while [ $$attempt -lt $$max_attempts ]; do
+        if curl -s -X POST -H 'Content-Type: application/json' \
+          --data '{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}' \
+          http://172.17.0.1:8545 2>/dev/null | grep -q result; then
+          echo '✓ Geth is ready and responding!';
+          echo '✓ Geth must be running with: --gcmode=archive --syncmode=full';
+          tail -f /dev/null;
+          exit 0;
+        fi;
+        attempt=$$((attempt + 1));
+        echo \"Attempt $$attempt/$$max_attempts: Waiting for Geth...\";
+        sleep 10;
+      done;
+      echo '✗ ERROR: Could not connect to Geth after $$max_attempts attempts';
+      echo '✗ Make sure Geth is running on port 8545 with archive mode enabled';
+      exit 1;
+      "
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+    restart: "no"
+
+  backend:
+    image: blockscout/blockscout:latest
+    restart: always
+    container_name: halo-blockscout-backend
+    command: sh -c "bin/blockscout eval \"Elixir.Explorer.ReleaseTasks.create_and_migrate()\" && bin/blockscout start"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      geth-checker:
+        condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+    environment:
+      # Database
+      DATABASE_URL: 'postgresql://blockscout:halochain@db:5432/blockscout'
+      POOL_SIZE: '50'
+      POOL_SIZE_API: '10'
+
+      # Redis
+      REDIS_URL: 'redis://redis:6379'
+
+      # Network
+      NETWORK: 'Halo Chain'
+      SUBNETWORK: 'Mainnet'
+      CHAIN_ID: '12000'
+
+      # RPC endpoints - Using host network gateway
+      ETHEREUM_JSONRPC_VARIANT: 'geth'
+      ETHEREUM_JSONRPC_HTTP_URL: 'http://172.17.0.1:8545'
+      ETHEREUM_JSONRPC_TRACE_URL: 'http://172.17.0.1:8545'
+      # Note: WS_URL commented out - can cause connection issues with some setups
+      # ETHEREUM_JSONRPC_WS_URL: 'ws://172.17.0.1:8545'
+
+      # Indexer settings - Optimized for archive node
+      INDEXER_DISABLE_PENDING_TRANSACTIONS_FETCHER: 'true'
+      INDEXER_DISABLE_INTERNAL_TRANSACTIONS_FETCHER: 'false'
+      INDEXER_INTERNAL_TRANSACTIONS_BATCH_SIZE: '10'
+      INDEXER_INTERNAL_TRANSACTIONS_CONCURRENCY: '2'
+      INDEXER_CATCHUP_BLOCKS_BATCH_SIZE: '10'
+      INDEXER_CATCHUP_BLOCKS_CONCURRENCY: '1'
+      
+      # Archive node trace settings
+      INDEXER_INTERNAL_TRANSACTIONS_TRACER_TYPE: 'call_tracer'
+
+      # Block time - 1 second
+      BLOCK_TIME: '1000'
+      AVERAGE_BLOCK_TIME: '1000'
+
+      # Features
+      ENABLE_TXS_STATS: 'true'
+      SHOW_PRICE_CHART: 'false'
+      SHOW_TXS_CHART: 'true'
+      DISPLAY_TOKEN_ICONS: 'true'
+
+      # Coin settings
+      COIN: 'HALO'
+      COIN_NAME: 'Halo'
+
+      # UI Settings
+      LOGO: '/images/blockscout_logo.svg'
+      LOGO_FOOTER: '/images/blockscout_logo.svg'
+
+      # Secret key base (IMPORTANT: Generate a new one with: openssl rand -base64 64)
+      SECRET_KEY_BASE: 'M6w5Z1YG3uYeRLYIEzadExlBc5Crik7neBmcQc/hzE+2JP6MX/D4CmKNp0CeqQHCiJV26eqGw0d5cBRaxQpWEw=='
+
+      # API settings
+      API_V2_ENABLED: 'true'
+      API_RATE_LIMIT_DISABLED: 'false'
+      API_RATE_LIMIT: '50'
+      API_RATE_LIMIT_TIME_INTERVAL: '1s'
+
+      # CORS settings - CRITICAL for frontend communication
+      CHECK_ORIGIN: 'false'
+      
+      # Additional settings
+      HEART_BEAT_TIMEOUT: '30'
+
+      # EIP-1559
+      EIP_1559_ENABLED: 'true'
+
+      # Archive node features
+      TRACE_FIRST_BLOCK: '1'
+      TRACE_LAST_BLOCK: 'latest'
+
+      # Frontend configuration
+      BLOCKSCOUT_HOST: 'localhost'
+      BLOCKSCOUT_PROTOCOL: 'http'
+
+      # Ecto settings
+      ECTO_USE_SSL: 'false'
+
+      # Port
+      PORT: '4000'
+
+      # Exchange rates disabled for private chain
+      DISABLE_EXCHANGE_RATES: 'true'
+      DISABLE_KNOWN_TOKENS: 'false'
+
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./blockscout-logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/api/v2/search?q=0x || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  frontend:
+    image: ghcr.io/blockscout/frontend:latest
+    restart: always
+    container_name: halo-blockscout-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      # API Configuration - CRITICAL for search functionality
+      NEXT_PUBLIC_API_HOST: 'localhost'
+      NEXT_PUBLIC_API_PORT: '4000'
+      NEXT_PUBLIC_API_PROTOCOL: 'http'
+      NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: 'ws'
+      NEXT_PUBLIC_API_BASE_PATH: '/'
+      
+      # App configuration
+      NEXT_PUBLIC_APP_HOST: 'localhost'
+      NEXT_PUBLIC_APP_PORT: '3000'
+      NEXT_PUBLIC_APP_PROTOCOL: 'http'
+      
+      # Stats and Visualize APIs
+      NEXT_PUBLIC_STATS_API_HOST: 'http://localhost:8080'
+      NEXT_PUBLIC_VISUALIZE_API_HOST: 'http://localhost:8081'
+      
+      # Network Configuration
+      NEXT_PUBLIC_NETWORK_NAME: 'Halo Chain'
+      NEXT_PUBLIC_NETWORK_SHORT_NAME: 'Halo'
+      NEXT_PUBLIC_NETWORK_ID: '12000'
+      NEXT_PUBLIC_NETWORK_RPC_URL: 'http://localhost:8545'
+      
+      # Currency
+      NEXT_PUBLIC_NETWORK_CURRENCY_NAME: 'Halo'
+      NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL: 'HALO'
+      NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS: '18'
+      
+      # Network Type
+      NEXT_PUBLIC_IS_TESTNET: 'false'
+      
+      # Block time - 1000ms = 1 second
+      NEXT_PUBLIC_AVERAGE_BLOCK_TIME: '1000'
+      
+      # Homepage configuration
+      NEXT_PUBLIC_HOMEPAGE_CHARTS: "['daily_txs','coin_price','market_cap']"
+      
+      # Features
+      NEXT_PUBLIC_MARKETPLACE_ENABLED: 'false'
+      NEXT_PUBLIC_AD_BANNER_PROVIDER: 'none'
+      NEXT_PUBLIC_AD_TEXT_PROVIDER: 'none'
+      
+      # API specs
+      NEXT_PUBLIC_API_SPEC_URL: 'https://raw.githubusercontent.com/blockscout/blockscout-api-v2-swagger/main/swagger.yaml'
+      
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Stats service (optional but recommended)
+  stats:
+    image: ghcr.io/blockscout/stats:latest
+    restart: always
+    container_name: halo-blockscout-stats
+    depends_on:
+      - backend
+    environment:
+      STATS__DB_URL: 'postgresql://blockscout:halochain@db:5432/blockscout_stats'
+      STATS__BLOCKSCOUT_DB_URL: 'postgresql://blockscout:halochain@db:5432/blockscout'
+      STATS__CREATE_DATABASE: 'true'
+      STATS__RUN_MIGRATIONS: 'true'
+    ports:
+      - "8080:8080"
+
+  # Visualizer service (optional but recommended)
+  visualizer:
+    image: ghcr.io/blockscout/visualizer:latest
+    restart: always
+    container_name: halo-blockscout-visualizer
+    environment:
+      VISUALIZER__SERVER__HTTP__ADDR: '0.0.0.0:8081'
+    ports:
+      - "8081:8081"
+
+  smart-contract-verifier:
+    image: ghcr.io/blockscout/smart-contract-verifier:latest
+    restart: always
+    container_name: halo-smart-contract-verifier
+    environment:
+      SMART_CONTRACT_VERIFIER__SERVER__HTTP__ADDR: '0.0.0.0:8050'
+      SMART_CONTRACT_VERIFIER__SOLIDITY__ENABLED: 'true'
+      SMART_CONTRACT_VERIFIER__SOLIDITY__COMPILERS_DIR: '/tmp/solidity-compilers'
+      SMART_CONTRACT_VERIFIER__SOLIDITY__REFRESH_VERSIONS_SCHEDULE: '0 0 * * * * *'
+      SMART_CONTRACT_VERIFIER__VYPER__ENABLED: 'true'
+      SMART_CONTRACT_VERIFIER__VYPER__COMPILERS_DIR: '/tmp/vyper-compilers'
+      SMART_CONTRACT_VERIFIER__VYPER__REFRESH_VERSIONS_SCHEDULE: '0 0 * * * * *'
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./verifier-cache:/tmp
+
+volumes:
+  blockscout-db-data:
+    driver: local

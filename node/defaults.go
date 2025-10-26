@@ -68,5 +68,5 @@ var DefaultConfig = Config{
 		MaxPeers:   50,
 		NAT:        nat.Any(),
 	},
-	DBEngine: "", // Use whatever exists, will default to Pebble if non-existent and supported
+	DBEngine: "pebble", // Halo default: Pebble DB (faster than LevelDB)
 }
