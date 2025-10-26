@@ -189,7 +189,7 @@ services:
       NEXT_PUBLIC_API_BASE_PATH: '/'
       
       # App configuration
-      NEXT_PUBLIC_APP_HOST: 'localhost'
+      NEXT_PUBLIC_APP_HOST: '51.20.84.193'
       NEXT_PUBLIC_APP_PORT: '3000'
       NEXT_PUBLIC_APP_PROTOCOL: 'http'
       
