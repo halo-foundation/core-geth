@@ -182,7 +182,7 @@ services:
         condition: service_healthy
     environment:
       # API Configuration - CRITICAL for search functionality
-      NEXT_PUBLIC_API_HOST: 'localhost'
+      NEXT_PUBLIC_API_HOST: '51.20.84.193'
       NEXT_PUBLIC_API_PORT: '4000'
       NEXT_PUBLIC_API_PROTOCOL: 'http'
       NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: 'ws'
@@ -194,14 +194,14 @@ services:
       NEXT_PUBLIC_APP_PROTOCOL: 'http'
       
       # Stats and Visualize APIs
-      NEXT_PUBLIC_STATS_API_HOST: 'http://localhost:8080'
-      NEXT_PUBLIC_VISUALIZE_API_HOST: 'http://localhost:8081'
+      NEXT_PUBLIC_STATS_API_HOST: 'http://51.20.84.193:8080'
+      NEXT_PUBLIC_VISUALIZE_API_HOST: 'http://51.20.84.193:8081'
       
       # Network Configuration
       NEXT_PUBLIC_NETWORK_NAME: 'Halo Chain'
       NEXT_PUBLIC_NETWORK_SHORT_NAME: 'Halo'
       NEXT_PUBLIC_NETWORK_ID: '12000'
-      NEXT_PUBLIC_NETWORK_RPC_URL: 'http://localhost:8545'
+      NEXT_PUBLIC_NETWORK_RPC_URL: 'http://51.20.84.193:8545'
       
       # Currency
       NEXT_PUBLIC_NETWORK_CURRENCY_NAME: 'Halo'
