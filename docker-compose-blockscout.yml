@@ -212,7 +212,7 @@ services:
       NEXT_PUBLIC_IS_TESTNET: 'false'
       
       # Block time - 1000ms = 1 second
-      NEXT_PUBLIC_AVERAGE_BLOCK_TIME: '1000'
+      #NEXT_PUBLIC_AVERAGE_BLOCK_TIME: '1000'
       
       # Homepage configuration
       NEXT_PUBLIC_HOMEPAGE_CHARTS: "['daily_txs','coin_price','market_cap']"
@@ -242,6 +242,7 @@ services:
     depends_on:
       - backend
     environment:
+      STATS__BLOCKSCOUT_API_URL: 'http://backend:4000'
       STATS__DB_URL: 'postgresql://blockscout:halochain@db:5432/blockscout_stats'
       STATS__BLOCKSCOUT_DB_URL: 'postgresql://blockscout:halochain@db:5432/blockscout'
       STATS__CREATE_DATABASE: 'true'
