@@ -72,8 +72,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      geth-checker:
-        condition: service_completed_successfully
+      #geth-checker:
+        #condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
     environment:
