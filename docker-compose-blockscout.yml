@@ -94,6 +94,7 @@ services:
       ETHEREUM_JSONRPC_VARIANT: 'geth'
       ETHEREUM_JSONRPC_HTTP_URL: 'http://172.17.0.1:8545'
       ETHEREUM_JSONRPC_TRACE_URL: 'http://172.17.0.1:8545'
+      CORS_ALLOW_ORIGIN: '*'
       # Note: WS_URL commented out - can cause connection issues with some setups
       # ETHEREUM_JSONRPC_WS_URL: 'ws://172.17.0.1:8545'
 
