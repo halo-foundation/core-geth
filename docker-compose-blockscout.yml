@@ -288,7 +288,6 @@ services:
       - frontend
       - stats
       - visualizer
-    command: "/bin/sh -c 'while :; do sleep 6h & wait ${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
 
   # Certbot for SSL certificates
   certbot:
