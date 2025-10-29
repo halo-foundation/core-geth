@@ -374,13 +374,10 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 			return err
 		}
 
-		// SECURITY LAYER 2: Maximum timestamp jump per block
-		// Prevents timestamp racing where miners jump timestamps wildly
-		maxJump := getMaxTimestampJump(chainID)
-		if header.Time > parent.Time+maxJump {
-			return fmt.Errorf("timestamp jumped too far: %d -> %d (max +%ds per block)",
-				parent.Time, header.Time, maxJump)
-		}
+		// NOTE: Timestamp jump validation removed to prevent chain stalls during low hashrate periods
+		// In a new network, mining can stop for extended periods (minutes/hours/days)
+		// When mining resumes, timestamps will naturally jump beyond any reasonable per-block limit
+		// The MTP validation above already prevents backdating attacks
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty
 	expected := ethash.CalcDifficulty(chain, header.Time, parent)
