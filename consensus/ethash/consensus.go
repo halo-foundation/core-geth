@@ -48,6 +48,22 @@ var (
 	allowedFutureBlockTime = 15 * time.Second // Max time from current time allowed for blocks, before they're considered future blocks
 )
 
+// getAllowedFutureBlockTime returns the maximum time a block can be in the future
+// before being rejected as invalid.
+//
+// Halo chain (ChainID 12000) uses 30 seconds to handle operational clock drift
+// between distributed mining setups (e.g., Windows miners + Linux RPC nodes).
+// Standard Ethereum uses 15 seconds.
+//
+// Note: This tolerance is for block ACCEPTANCE only. Difficulty calculations
+// use timestamp capping to prevent manipulation attacks.
+func getAllowedFutureBlockTime(chainID *big.Int) time.Duration {
+	if chainID != nil && chainID.Uint64() == 12000 {
+		return 30 * time.Second // Halo: 30s tolerance for operational clock drift
+	}
+	return allowedFutureBlockTime // Standard Ethereum: 15s
+}
+
 // getMaxUncles returns the maximum number of uncles allowed for a given chain
 // Halo chain (ChainID 12000) allows 1 uncle, others allow 2
 func getMaxUncles(chainID *big.Int) int {
@@ -64,6 +80,61 @@ func getMaxUncleDepth(chainID *big.Int) int {
 		return 2 // Halo chain - uncles can be max 2 blocks deep
 	}
 	return 7 // Standard Ethereum - uncles can be max 7 blocks deep
+}
+
+// verifyMedianTimePast ensures block timestamp is greater than median of last 11 blocks.
+// This prevents miners from backdating blocks to manipulate difficulty.
+//
+// This is a Bitcoin-inspired security measure that prevents:
+// - Backdating attacks (creating blocks with old timestamps)
+// - Timestamp manipulation to lower difficulty
+// - Chain reorganization attacks using timestamp gaming
+func verifyMedianTimePast(chain consensus.ChainHeaderReader, header, parent *types.Header) error {
+	// Need at least 11 blocks for meaningful MTP calculation
+	if parent.Number.Uint64() < 11 {
+		return nil // Skip validation for early blocks
+	}
+
+	// Collect timestamps of last 11 blocks (including parent)
+	timestamps := make([]uint64, 11)
+	for i := 0; i < 11; i++ {
+		h := chain.GetHeaderByNumber(parent.Number.Uint64() - uint64(i))
+		if h == nil {
+			// Can't validate without full history, skip check
+			return nil
+		}
+		timestamps[i] = h.Time
+	}
+
+	// Sort timestamps to find median
+	sortedTimestamps := make([]uint64, 11)
+	copy(sortedTimestamps, timestamps)
+	// Simple bubble sort (only 11 elements, performance not critical)
+	for i := 0; i < 11; i++ {
+		for j := 0; j < 10-i; j++ {
+			if sortedTimestamps[j] > sortedTimestamps[j+1] {
+				sortedTimestamps[j], sortedTimestamps[j+1] = sortedTimestamps[j+1], sortedTimestamps[j]
+			}
+		}
+	}
+	medianTime := sortedTimestamps[5] // Middle value of 11 sorted elements
+
+	// Block timestamp must be strictly greater than median
+	if header.Time <= medianTime {
+		return fmt.Errorf("timestamp %d not greater than median time past %d (backdating prevented)",
+			header.Time, medianTime)
+	}
+
+	return nil
+}
+
+// getMaxTimestampJump returns the maximum allowed timestamp increase per block
+// This prevents timestamp racing attacks where miners jump timestamps wildly
+func getMaxTimestampJump(chainID *big.Int) uint64 {
+	if chainID != nil && chainID.Uint64() == 12000 {
+		return 10 // Halo: max 10 seconds jump per block
+	}
+	return 60 // Standard Ethereum: more lenient due to 12s block time
 }
 
 // Various error messages to mark blocks invalid. These should be private to
@@ -272,13 +343,34 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	}
 	// Verify the header's timestamp
 	if !uncle {
-		if header.Time > uint64(unixNow+int64(allowedFutureBlockTime.Seconds())) {
+		// Use chain-specific future block tolerance
+		chainID := chain.Config().GetChainID()
+		allowedFuture := getAllowedFutureBlockTime(chainID)
+		if header.Time > uint64(unixNow+int64(allowedFuture.Seconds())) {
 			return consensus.ErrFutureBlock
 		}
 	}
 	// Verify the timestamp
 	if header.Time <= parent.Time {
 		return errOlderBlockTime
+	}
+
+	// Halo-specific timestamp validations (ChainID 12000)
+	chainID := chain.Config().GetChainID()
+	if chainID != nil && chainID.Uint64() == 12000 && !uncle {
+		// SECURITY LAYER 1: Median Time Past (MTP) validation
+		// Prevents backdating attacks by ensuring timestamp > median of last 11 blocks
+		if err := verifyMedianTimePast(chain, header, parent); err != nil {
+			return err
+		}
+
+		// SECURITY LAYER 2: Maximum timestamp jump per block
+		// Prevents timestamp racing where miners jump timestamps wildly
+		maxJump := getMaxTimestampJump(chainID)
+		if header.Time > parent.Time+maxJump {
+			return fmt.Errorf("timestamp jumped too far: %d -> %d (max +%ds per block)",
+				parent.Time, header.Time, maxJump)
+		}
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty
 	expected := ethash.CalcDifficulty(chain, header.Time, parent)
@@ -485,28 +577,49 @@ func getHaloPhaseMinimum(blockNum uint64) *big.Int {
 // calcDifficultyHaloSecure implements Halo's SECURE difficulty algorithm with hybrid protection.
 // This algorithm provides PRODUCTION-GRADE security against difficulty manipulation attacks.
 //
-// HYBRID PROTECTION STRATEGY (4-Layer Defense):
-// 1. Absolute Minimum: 131,072 (same as Ethereum)
-// 2. Peak Memory: Cannot drop below 10% of max difficulty in last 100 blocks
-// 3. Historical Floor: Cannot drop below 50% of difficulty 100 blocks ago
-// 4. Bounded Adjustments: Maximum ±50% change per block
+// HYBRID PROTECTION STRATEGY (5-Layer Defense):
+// 1. Timestamp Capping: Future timestamps capped to "now" to prevent manipulation
+// 2. Absolute Minimum: 131,072 (same as Ethereum)
+// 3. Peak Memory: Cannot drop below 10% of max difficulty in last 100 blocks
+// 4. Historical Floor: Cannot drop below 50% of difficulty 100 blocks ago
+// 5. Bounded Adjustments: Maximum ±50% change per block
 //
 // This prevents:
+// - Future timestamp difficulty gaming (capping layer)
 // - Hashrate manipulation attacks (attacker joins/leaves to game difficulty)
 // - Rapid difficulty drops that enable chain reorganization
 // - 51% attacks during low difficulty windows
 //
+// Note: We accept blocks up to 30s in the future for operational reasons (clock drift),
+// but for difficulty calculations, we treat future timestamps as "now" to prevent gaming.
+//
 // Algorithm:
-//   Base calculation: adjustment = (parent_diff / 2048) * (1 - timeDelta)
-//   Apply all protection layers to determine final difficulty
-func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
+//   Timestamp capping → Base calculation → Apply all protection layers
+func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint64, parent *types.Header) *big.Int {
+	// ========== STEP 0: Timestamp Capping (CRITICAL SECURITY LAYER) ==========
+	// We accept blocks up to 30s in the future to handle clock drift between mining setups,
+	// BUT we cap timestamps to current time for difficulty calculations to prevent manipulation.
+	//
+	// Without this: Miners could use future timestamps to make blocks appear "slow",
+	// causing difficulty to drop, then mine many blocks quickly at lower difficulty.
+
+	// Get current wall clock time (note: renamed param to blockTime to avoid shadowing time package)
+	currentTime := uint64(time.Now().Unix())
+
+	adjustedTime := blockTime
+	if blockTime > currentTime {
+		// Block is in the future (up to 30s allowed for acceptance)
+		// But treat it as "now" for difficulty calculation
+		adjustedTime = currentTime
+	}
+
 	// ========== STEP 1: Calculate Base Difficulty Adjustment ==========
 	targetBlockTime := int64(1)      // 1 second target
 	adjustmentDivisor := int64(2048) // Same as Ethereum for stability
 	maxAdjustmentPercent := int64(50) // Maximum 50% adjustment per block
 
-	// Calculate time delta
-	timeDelta := int64(time) - int64(parent.Time)
+	// Calculate time delta using CAPPED timestamp (security critical)
+	timeDelta := int64(adjustedTime) - int64(parent.Time)
 
 	// Edge case: Clock skew protection
 	if timeDelta <= 0 {
