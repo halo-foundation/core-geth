@@ -23,13 +23,14 @@ var (
 )
 
 // DefaultHaloGenesisBlock returns the Halo network genesis block.
+// UPDATED for 4-second block time with enhanced security
 func DefaultHaloGenesisBlock() *genesisT.Genesis {
 	return &genesisT.Genesis{
 		Config:     HaloChainConfig,
 		Nonce:      0,
-		ExtraData:  hexutil.MustDecode("0x48616c6f204e6574776f726b"), // "Halo Network" in hex
+		ExtraData:  hexutil.MustDecode("0x48616c6f204e6574776f726b20763120343273"), // "Halo Network v1 4s" in hex
 		GasLimit:   150000000, // 150M gas limit (GenesisGasLimit)
-		Difficulty: hexutil.MustDecodeBig("0x1"), // Minimal initial difficulty - will auto-adjust via calcDifficultyHalo
+		Difficulty: hexutil.MustDecodeBig("0x10000"), // 65536 - matches absolute hard floor for security
 		Timestamp:  1700000000, // TODO: Set to actual launch timestamp
 		Alloc: genesisT.GenesisAlloc{
 			// Ecosystem Fund - receives 20% of fees

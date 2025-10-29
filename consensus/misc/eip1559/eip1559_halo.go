@@ -214,6 +214,8 @@ func SetContractFeeConfig(state *state.StateDB, contractAddr common.Address, con
 // - 10% to contract (from ecosystem's 20%)
 // - 10% to reserve fund (unchanged)
 //
+// SECURITY: Includes balance checks to prevent underflow attacks
+//
 // This is called during block finalization to distribute contract fee shares
 func ApplyHaloContractFeeSharing(state *state.StateDB, tx *types.Transaction, contractAddr common.Address, gasUsed uint64, baseFee *big.Int) error {
 	config := GetContractFeeConfig(state, contractAddr)
@@ -244,9 +246,23 @@ func ApplyHaloContractFeeSharing(state *state.StateDB, tx *types.Transaction, co
 	contractShare.Div(contractShare, uint256.NewInt(100))
 
 	if contractShare.Sign() > 0 {
-		// Deduct from ecosystem fund
+		// SECURITY FIX: Check ecosystem fund has sufficient balance before deduction
+		ecosystemBalance := state.GetBalance(params.HaloEcosystemFundAddress)
+
+		// If ecosystem fund has insufficient balance, only transfer what's available
+		// This prevents underflow attacks and state corruption
+		if ecosystemBalance.Cmp(contractShare) < 0 {
+			// Insufficient funds - only transfer available balance
+			if ecosystemBalance.Sign() > 0 {
+				state.SubBalance(params.HaloEcosystemFundAddress, ecosystemBalance)
+				state.AddBalance(config.FeeRecipient, ecosystemBalance)
+			}
+			// Don't error - just skip/reduce the fee sharing for this tx
+			return nil
+		}
+
+		// Sufficient balance - proceed with full fee sharing
 		state.SubBalance(params.HaloEcosystemFundAddress, contractShare)
-		// Add to contract's recipient
 		state.AddBalance(config.FeeRecipient, contractShare)
 	}
 

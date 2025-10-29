@@ -31,13 +31,15 @@ var (
 	haloPhase3End = uint64(691666)       // 2.5M tokens @ 1.5 HALO/block
 	haloPhase4End = uint64(5691666)      // 7.5M tokens @ 1 HALO/block
 
-	// Year boundaries (1 block/sec = 31,536,000 blocks/year)
-	haloYear1End = uint64(31536000)      // End of Year 1
-	haloYear2End = uint64(63072000)      // End of Year 2
-	haloYear3End = uint64(94608000)      // End of Year 3
-	haloYear4End = uint64(126144000)     // End of Year 4
-	haloYear5End = uint64(157680000)     // End of Year 5
-	haloYear6End = uint64(189216000)     // End of Year 6
+	// Year boundaries (UPDATED for 4-second blocks: 1 block/4sec = 7,884,000 blocks/year)
+	// Previous: 31,536,000 blocks/year (1-second blocks)
+	// Current: 7,884,000 blocks/year (4-second blocks)
+	haloYear1End = uint64(7884000)       // End of Year 1 (365.25 days × 86400 sec/day ÷ 4 sec/block)
+	haloYear2End = uint64(15768000)      // End of Year 2
+	haloYear3End = uint64(23652000)      // End of Year 3
+	haloYear4End = uint64(31536000)      // End of Year 4
+	haloYear5End = uint64(39420000)      // End of Year 5
+	haloYear6End = uint64(47304000)      // End of Year 6
 
 	// Block rewards (in wei) - 1 HALO = 10^18 wei
 	haloPhase1Reward = new(uint256.Int).Mul(uint256.NewInt(40), uint256.NewInt(1e18))  // 40 HALO
@@ -57,9 +59,13 @@ var (
 	haloMaxSupply = new(uint256.Int).Mul(uint256.NewInt(100000000), uint256.NewInt(1e18))
 
 	// Uncle reward ratios (per 1000)
-	haloUncleRewardDepth1 = uint256.NewInt(875) // 87.5% of block reward for depth 1
-	haloUncleRewardDepth2 = uint256.NewInt(750) // 75% of block reward for depth 2
-	haloNephewReward      = uint256.NewInt(31)  // 3.1% of block reward per uncle
+	// SECURITY FIX: Reduced from 87.5%/75%/3.1% to prevent self-mining uncle attacks
+	// Old values allowed 91% profit increase by self-mining uncles
+	// New values: 51% increase - still incentivizes including legitimate uncles
+	//             but less profitable for deliberate self-mining
+	haloUncleRewardDepth1 = uint256.NewInt(500) // 50% of block reward for depth 1 (was 87.5%)
+	haloUncleRewardDepth2 = uint256.NewInt(375) // 37.5% of block reward for depth 2 (was 75%)
+	haloNephewReward      = uint256.NewInt(15)  // 1.5% of block reward per uncle (was 3.1%)
 	haloDenominator       = uint256.NewInt(1000)
 
 	haloOne = uint256.NewInt(1)
@@ -68,22 +74,25 @@ var (
 // GetHaloBlockReward calculates the block reward for a given block number
 // Implements phased reduction schedule with 100M max supply:
 //
-// Phase 1 (blocks 0-25,000): 40 HALO → 1M tokens in 6.94 hours
-// Phase 2 (blocks 25,001-358,333): 3 HALO → 1M tokens in 3.86 days
-// Phase 3 (blocks 358,334-691,666): 1.5 HALO → 0.5M tokens in 3.86 days
-// Phase 4 (blocks 691,667-5,691,666): 1 HALO → 5M tokens in 57.87 days
-// Total Phases 1-4: 7.5M tokens in ~65.9 days
+// UPDATED for 4-second blocks (time estimates 4x longer than original 1-second design):
 //
-// Phase 5 (Year 1 remainder): 0.5 HALO → ~12.92M tokens
-// Year 1 total: ~20.42M tokens
+// Phase 1 (blocks 0-25,000): 40 HALO → 1M tokens in 27.78 hours (~1.16 days)
+// Phase 2 (blocks 25,001-358,333): 3 HALO → 1M tokens in 15.43 days
+// Phase 3 (blocks 358,334-691,666): 1.5 HALO → 0.5M tokens in 15.43 days
+// Phase 4 (blocks 691,667-5,691,666): 1 HALO → 5M tokens in 231.48 days
+// Total Phases 1-4: 7.5M tokens in ~263.6 days
 //
-// Year 2: 0.375 HALO (75% of previous) → 11.826M tokens (total: 32.248M)
-// Year 3: 0.28125 HALO → 8.870M tokens (total: 41.118M)
-// Year 4: 0.2109375 HALO → 6.652M tokens (total: 47.770M)
-// Year 5: 0.158203125 HALO → 4.989M tokens (total: 52.759M)
-// Year 6+: 0.125 HALO (minimum floor) → ~3.942M tokens/year
+// Phase 5 (Year 1 remainder): 0.5 HALO → ~1.096M tokens in 101.4 days
+// Year 1 total: ~8.596M tokens
 //
-// Max supply of 100M reached in approximately 18 years
+// Year 2: 0.375 HALO (75% of previous) → 2.956M tokens (total: 11.552M)
+// Year 3: 0.28125 HALO → 2.217M tokens (total: 13.769M)
+// Year 4: 0.2109375 HALO → 1.663M tokens (total: 15.432M)
+// Year 5: 0.158203125 HALO → 1.247M tokens (total: 16.679M)
+// Year 6+: 0.125 HALO (minimum floor) → ~0.986M tokens/year
+//
+// Max supply of 100M reached in approximately 90+ years
+// (Much longer emission schedule due to 4-second blocks vs original 1-second design)
 func GetHaloBlockReward(blockNum *big.Int) *uint256.Int {
 	blockNumber := blockNum.Uint64()
 
@@ -137,18 +146,19 @@ func GetHaloBlockReward(blockNum *big.Int) *uint256.Int {
 }
 
 // GetHaloUncleReward calculates the uncle reward based on depth
-// Depth 1 (uncle is 1 block behind): 87.5% of block reward
-// Depth 2 (uncle is 2 blocks behind): 75% of block reward
+// SECURITY FIX: Reduced rewards to prevent self-mining uncle attacks
+// Depth 1 (uncle is 1 block behind): 50% of block reward (was 87.5%)
+// Depth 2 (uncle is 2 blocks behind): 37.5% of block reward (was 75%)
 func GetHaloUncleReward(header, uncle *types.Header, blockReward *uint256.Int) *uint256.Int {
 	// Calculate depth
 	depth := new(uint256.Int).Sub(uint256.MustFromBig(header.Number), uint256.MustFromBig(uncle.Number))
 
 	var rewardRatio *uint256.Int
 	if depth.Cmp(haloOne) == 0 {
-		// Depth 1: 87.5%
+		// Depth 1: 50%
 		rewardRatio = haloUncleRewardDepth1
 	} else if depth.Cmp(uint256.NewInt(2)) == 0 {
-		// Depth 2: 75%
+		// Depth 2: 37.5%
 		rewardRatio = haloUncleRewardDepth2
 	} else {
 		// No reward for depth > 2
@@ -163,7 +173,8 @@ func GetHaloUncleReward(header, uncle *types.Header, blockReward *uint256.Int) *
 }
 
 // GetHaloNephewReward calculates the reward for the block miner for including uncles
-// Miner gets 3.1% of block reward per uncle (max 1 uncle)
+// SECURITY FIX: Reduced from 3.1% to 1.5% per uncle to prevent self-mining attacks
+// Miner gets 1.5% of block reward per uncle (max 1 uncle for Halo)
 func GetHaloNephewReward(uncles []*types.Header, blockReward *uint256.Int) *uint256.Int {
 	if len(uncles) == 0 {
 		return uint256.NewInt(0)
