@@ -18,7 +18,7 @@ Quick reference for all Halo chain custom parameters.
 | **Target Block Time** | 4 seconds | 12 seconds |
 | **DifficultyBoundDivisor** | 2048 | 2048 |
 | **DurationLimit** | 4 seconds | 13 seconds |
-| **Genesis Difficulty** | 65,536 (0x10000) | 131,072 |
+| **Genesis Difficulty** | 16,384 (0x4000) | 131,072 |
 
 ## Gas Limits
 
@@ -321,7 +321,7 @@ geth \
   "timestamp": "0x65700000",
   "extraData": "0x48616c6f204e6574776f726b20763120343273",
   "gasLimit": "0x8F0D180",
-  "difficulty": "0x10000",
+  "difficulty": "0x4000",
   "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
   "coinbase": "0x0000000000000000000000000000000000000000",
   "alloc": {},
