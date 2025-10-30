@@ -698,7 +698,7 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	// Starting from diff 1,000, this reaches ~455k by block 12,500
 	// After that, switch to aggressive 20% for production security
 	var maxAdjustmentDivisor int64
-	if blockNum < 12500 {
+	if blockNum <= 12500 {
 		// 0.049% = 1/2040.8... ≈ 1/2041 for simplicity
 		maxAdjustmentDivisor = 2041 // Ultra-gentle: 0.049% for first 12,500 blocks
 	} else {
@@ -773,7 +773,7 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 
 		// Emergency floor varies by phase
 		var emergencyFloor *big.Int
-		if blockNum < 12500 {
+		if blockNum <= 12500 {
 			emergencyFloor = big.NewInt(500) // 50% of gentle ramp minimum (1000)
 		} else {
 			emergencyFloor = big.NewInt(16384) // 0x4000 - 50% of full minimum
@@ -791,12 +791,13 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	// SECURITY FIX: Using averages instead of single points - much harder to manipulate
 	// Multiple overlapping windows provide defense in depth
 	// UPDATED for 4-second blocks: Adjusted block counts to maintain same time windows
+	// DISABLED during gentle ramp (blocks 0-12500) to allow difficulty to climb naturally
 
 	// Short-term protection: 15 blocks (1 minute average at 4s/block)
 	// Cannot drop below 50% of recent average
 	const shortTermBlocks = uint64(15) // 15 blocks × 4s = 60 seconds (1 minute)
 	shortTermMinimum := big.NewInt(0)
-	if blockNum >= shortTermBlocks {
+	if blockNum > 12500 && blockNum >= shortTermBlocks {
 		avgDiff := calculateAverageDifficulty(chain, blockNum, shortTermBlocks)
 		if avgDiff != nil && avgDiff.Sign() > 0 {
 			shortTermMinimum.Div(avgDiff, big.NewInt(2)) // 50% of 1-min average
@@ -807,7 +808,7 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	// Cannot drop below 40% of medium-term average
 	const mediumTermBlocks = uint64(75) // 75 blocks × 4s = 300 seconds (5 minutes)
 	mediumTermMinimum := big.NewInt(0)
-	if blockNum >= mediumTermBlocks {
+	if blockNum > 12500 && blockNum >= mediumTermBlocks {
 		avgDiff := calculateAverageDifficulty(chain, blockNum, mediumTermBlocks)
 		if avgDiff != nil && avgDiff.Sign() > 0 {
 			// 40% of 5-min average
@@ -820,7 +821,7 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	// Cannot drop below 30% of long-term average
 	const longTermBlocks = uint64(150) // 150 blocks × 4s = 600 seconds (10 minutes)
 	longTermMinimum := big.NewInt(0)
-	if blockNum >= longTermBlocks {
+	if blockNum > 12500 && blockNum >= longTermBlocks {
 		avgDiff := calculateAverageDifficulty(chain, blockNum, longTermBlocks)
 		if avgDiff != nil && avgDiff.Sign() > 0 {
 			// 30% of 10-min average
@@ -832,8 +833,8 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	// Layer 3: EARLY BLOCK SYMMETRIC ADJUSTMENT
 	// DISABLED for first 12,500 blocks to allow gradual difficulty ramp
 	// After block 12,500, this provides quick response for production mining
-	if blockNum >= 12500 && blockNum < 12600 && newDifficulty.Cmp(big.NewInt(500000)) < 0 {
-		// For blocks 12,500-12,600, apply symmetric adjustment
+	if blockNum > 12500 && blockNum < 12600 && newDifficulty.Cmp(big.NewInt(500000)) < 0 {
+		// For blocks 12,501-12,600, apply symmetric adjustment
 		adjustment := new(big.Int).Div(newDifficulty, big.NewInt(10))
 		if timeDelta < targetBlockTime {
 			// Fast block: increase difficulty
@@ -850,31 +851,42 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	// First 12,500 blocks: 1000 (gentle ramp for CPU mining)
 	// After 12,500 blocks: 65536 (0x10000 - full PoW security)
 	var absoluteHardFloor *big.Int
-	if blockNum < 12500 {
-		absoluteHardFloor = big.NewInt(1000) // Gentle ramp phase
+	if blockNum <= 12500 {
+		absoluteHardFloor = big.NewInt(1000) // Gentle ramp phase (blocks 0-12500)
 	} else {
+		// After block 12500, don't force difficulty DOWN if it ramped above 65536
+		// This allows smooth transition from ramped difficulty (e.g., 455k) to production
 		absoluteHardFloor = big.NewInt(0x10000) // 65536 - production security
+		if newDifficulty.Cmp(absoluteHardFloor) > 0 {
+			// Already above floor, allow it to continue naturally
+			absoluteHardFloor = new(big.Int).Set(newDifficulty)
+		}
 	}
 
 	// Start with phase/emergency minimum
 	finalMinimum := new(big.Int).Set(absoluteMinimum)
 
 	// Apply short-term average protection (1 minute)
+	// Only active after block 12500 (see Layer 2 calculation above)
 	if shortTermMinimum.Cmp(finalMinimum) > 0 {
 		finalMinimum.Set(shortTermMinimum)
 	}
 
 	// Apply medium-term average protection (5 minutes)
+	// Only active after block 12500 (see Layer 2 calculation above)
 	if mediumTermMinimum.Cmp(finalMinimum) > 0 {
 		finalMinimum.Set(mediumTermMinimum)
 	}
 
 	// Apply long-term average protection (10 minutes)
+	// Only active after block 12500 (see Layer 2 calculation above)
 	if longTermMinimum.Cmp(finalMinimum) > 0 {
 		finalMinimum.Set(longTermMinimum)
 	}
 
-	// CRITICAL: Enforce absolute hard floor - no matter what, never go below 0x10000
+	// CRITICAL: Enforce absolute hard floor
+	// During gentle ramp: never below 1000
+	// After block 12500: never below 65536 (unless ramped above, then continue naturally)
 	if finalMinimum.Cmp(absoluteHardFloor) < 0 {
 		finalMinimum.Set(absoluteHardFloor)
 	}
