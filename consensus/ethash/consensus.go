@@ -593,29 +593,31 @@ func isHaloEmergencyMode(chain consensus.ChainHeaderReader, parent *types.Header
 // NOTE: Absolute hard floor of 0x10000 (65536) is enforced separately as ultimate safety
 func getHaloPhaseMinimum(blockNum uint64) *big.Int {
 	const (
-		phase1End = uint64(10000)  // End of easy phase
-		phase2End = uint64(50000)  // End of transition phase
-		minEarly  = 32768          // Early minimum (0x8000) - INCREASED from 4096 for security
-		minFull   = 131072         // Full minimum (0x20000)
+		gentleRampEnd = uint64(12500) // Gentle ramp period for initial mining
+		phase1End     = uint64(10000) // End of easy phase
+		phase2End     = uint64(50000) // End of transition phase
+		minGentle     = 1000          // Very low start for gentle ramp (blocks 0-12,500)
+		minEarly      = 32768         // Early minimum (0x8000)
+		minFull       = 131072        // Full minimum (0x20000)
 	)
 
-	// Phase 1: Easy start (blocks 0-10,000)
-	if blockNum <= phase1End {
-		return big.NewInt(minEarly)
+	// GENTLE RAMP: Blocks 0-12,500 start at 1,000 for CPU mining
+	if blockNum <= gentleRampEnd {
+		return big.NewInt(minGentle)
+	}
+
+	// Phase 1: Easy start (blocks 12,501-10,000... wait, this doesn't make sense)
+	// Let's restructure: after gentle ramp, jump to phase 2
+	if blockNum <= phase2End {
+		// Linear transition from minEarly to minFull
+		progress := blockNum - gentleRampEnd
+		totalSteps := phase2End - gentleRampEnd
+		increment := (minFull - minEarly) * progress / totalSteps
+		return big.NewInt(int64(minEarly + increment))
 	}
 
 	// Phase 3: Full security (blocks 50,000+)
-	if blockNum >= phase2End {
-		return big.NewInt(minFull)
-	}
-
-	// Phase 2: Linear transition (blocks 10,001-50,000)
-	// Calculate: minEarly + (blockNum - phase1End) * (minFull - minEarly) / (phase2End - phase1End)
-	progress := blockNum - phase1End
-	totalSteps := phase2End - phase1End
-	increment := (minFull - minEarly) * progress / totalSteps
-
-	return big.NewInt(int64(minEarly + increment))
+	return big.NewInt(minFull)
 }
 
 // calcDifficultyHaloSecure implements Halo's SECURE difficulty algorithm with hybrid protection.
@@ -688,10 +690,20 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	// - Still very fast UX (4s << Ethereum's 12s)
 	targetBlockTime := int64(4)      // 4 second target (was 1 second)
 	adjustmentDivisor := int64(2048) // Same as Ethereum for stability
-	// SECURITY FIX: Reduced from 50% to 20% for fast blocks
-	// With 4s blocks, 50% was too aggressive (750% per minute possible)
-	// 20% per block = 300% per minute = reasonable and responsive
-	maxAdjustmentPercent := int64(20) // Maximum 20% adjustment per block
+
+	// Get current block number (needed for phase calculation)
+	blockNum := parent.Number.Uint64()
+
+	// GRADUAL RAMP: For first 12,500 blocks, use ultra-gentle 0.049% adjustment
+	// Starting from diff 1,000, this reaches ~455k by block 12,500
+	// After that, switch to aggressive 20% for production security
+	var maxAdjustmentDivisor int64
+	if blockNum < 12500 {
+		// 0.049% = 1/2040.8... ≈ 1/2041 for simplicity
+		maxAdjustmentDivisor = 2041 // Ultra-gentle: 0.049% for first 12,500 blocks
+	} else {
+		maxAdjustmentDivisor = 5 // Aggressive: 20% after block 12,500
+	}
 
 	// Calculate time delta using CAPPED timestamp (security critical)
 	timeDelta := int64(adjustedTime) - int64(parent.Time)
@@ -725,8 +737,10 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	baseAdjustment := new(big.Int).Div(parent.Difficulty, big.NewInt(adjustmentDivisor))
 	adjustment := new(big.Int).Mul(baseAdjustment, big.NewInt(-timeDeviation))
 
-	// Cap maximum single-block adjustment (±50%)
-	maxAdjustment := new(big.Int).Div(parent.Difficulty, big.NewInt(100/maxAdjustmentPercent))
+	// Cap maximum single-block adjustment using the divisor
+	// For first 12,500 blocks: divisor=2041 gives ~0.049% adjustment
+	// After block 12,500: divisor=5 gives 20% adjustment
+	maxAdjustment := new(big.Int).Div(parent.Difficulty, big.NewInt(maxAdjustmentDivisor))
 	if adjustment.CmpAbs(maxAdjustment) > 0 {
 		if adjustment.Sign() < 0 {
 			adjustment.Neg(maxAdjustment)
@@ -739,9 +753,6 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	newDifficulty := new(big.Int).Add(parent.Difficulty, adjustment)
 
 	// ========== STEP 2: Apply Hybrid Protection (4 Layers) ==========
-
-	// Get current block number (needed for phase calculation and lookbacks)
-	blockNum := parent.Number.Uint64()
 
 	// EMERGENCY RECOVERY MODE CHECK
 	// If blocks are consistently slow (avg > 30s over last 10 blocks),
@@ -760,10 +771,14 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 		// 50% reduction still allows recovery but maintains security floor
 		absoluteMinimum = new(big.Int).Div(normalMinimum, big.NewInt(2))
 
-		// SECURITY FIX: Emergency floor increased to 16384 (0x4000)
-		// This is 50% of new Phase 1 minimum (32768), maintaining consistency
-		// Previous: 8192, New: 16384 (2x more secure)
-		emergencyFloor := big.NewInt(16384) // 0x4000
+		// Emergency floor varies by phase
+		var emergencyFloor *big.Int
+		if blockNum < 12500 {
+			emergencyFloor = big.NewInt(500) // 50% of gentle ramp minimum (1000)
+		} else {
+			emergencyFloor = big.NewInt(16384) // 0x4000 - 50% of full minimum
+		}
+
 		if absoluteMinimum.Cmp(emergencyFloor) < 0 {
 			absoluteMinimum = emergencyFloor
 		}
@@ -815,11 +830,10 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 	}
 
 	// Layer 3: EARLY BLOCK SYMMETRIC ADJUSTMENT
-	// SECURITY FIX: Removed asymmetric boost that favored high-hashrate miners
-	// Previous version only boosted fast blocks, didn't penalize slow blocks
-	// Now using symmetric adjustment for fairness
-	if blockNum < 100 && newDifficulty.Cmp(big.NewInt(500000)) < 0 {
-		// For first 100 blocks, apply symmetric adjustment
+	// DISABLED for first 12,500 blocks to allow gradual difficulty ramp
+	// After block 12,500, this provides quick response for production mining
+	if blockNum >= 12500 && blockNum < 12600 && newDifficulty.Cmp(big.NewInt(500000)) < 0 {
+		// For blocks 12,500-12,600, apply symmetric adjustment
 		adjustment := new(big.Int).Div(newDifficulty, big.NewInt(10))
 		if timeDelta < targetBlockTime {
 			// Fast block: increase difficulty
@@ -832,9 +846,15 @@ func calcDifficultyHaloSecure(chain consensus.ChainHeaderReader, blockTime uint6
 
 	// ========== STEP 3: Enforce ABSOLUTE HARD FLOOR + All Protection Minimums ==========
 
-	// ABSOLUTE HARD FLOOR: 0x10000 (65536) - can NEVER go below this under any circumstances
-	// This is the minimum difficulty that provides basic PoW security
-	absoluteHardFloor := big.NewInt(0x10000) // 65536
+	// ABSOLUTE HARD FLOOR: Varies by phase
+	// First 12,500 blocks: 1000 (gentle ramp for CPU mining)
+	// After 12,500 blocks: 65536 (0x10000 - full PoW security)
+	var absoluteHardFloor *big.Int
+	if blockNum < 12500 {
+		absoluteHardFloor = big.NewInt(1000) // Gentle ramp phase
+	} else {
+		absoluteHardFloor = big.NewInt(0x10000) // 65536 - production security
+	}
 
 	// Start with phase/emergency minimum
 	finalMinimum := new(big.Int).Set(absoluteMinimum)
