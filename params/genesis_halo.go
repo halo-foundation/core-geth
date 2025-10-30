@@ -30,7 +30,7 @@ func DefaultHaloGenesisBlock() *genesisT.Genesis {
 		Nonce:      0,
 		ExtraData:  hexutil.MustDecode("0x48616c6f204e6574776f726b20763120343273"), // "Halo Network v1 4s" in hex
 		GasLimit:   150000000, // 150M gas limit (GenesisGasLimit)
-		Difficulty: hexutil.MustDecodeBig("0x4000"), // 16384 - easier initial mining for network bootstrap
+		Difficulty: hexutil.MustDecodeBig("0x1F4"), // 500 - very low for easy testnet bootstrap
 		Timestamp:  1700000000, // TODO: Set to actual launch timestamp
 		Alloc: genesisT.GenesisAlloc{
 			// Ecosystem Fund - receives 20% of fees
